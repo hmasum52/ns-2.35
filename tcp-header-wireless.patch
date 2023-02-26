@@ -1,0 +1,242 @@
+diff --git a/Makefile b/Makefile
+index 902a6a9..ebc622f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -194,6 +194,7 @@ OBJ_CC = \
+ 	tcp/tcp.o tcp/tcp-sink.o tcp/tcp-reno.o \
+ 	tcp/tcp-newreno.o \
+ 	tcp/tcp-vegas.o tcp/tcp-rbp.o tcp/tcp-full.o tcp/rq.o \
++	tcp/tcp-snr.o \
+ 	baytcp/tcp-full-bay.o baytcp/ftpc.o baytcp/ftps.o \
+ 	tcp/scoreboard.o tcp/scoreboard-rq.o tcp/tcp-sack1.o tcp/tcp-fack.o \
+ 	tcp/scoreboard1.o tcp/tcp-linux.o tcp/linux/ns-linux-util.o \
+diff --git a/mac/channel.cc b/mac/channel.cc
+index 5b9ab78..ac65c93 100644
+--- a/mac/channel.cc
++++ b/mac/channel.cc
+@@ -323,6 +323,12 @@ WirelessChannel::sendUp(Packet* p, Phy *tifp)
+ 	Packet *newp;
+ 	double propdelay = 0.0;
+ 	struct hdr_cmn *hdr = HDR_CMN(p);
++	// check if tcp packet
++	if (hdr->ptype() == PT_TCP) {
++		// get tcp header and set wireless flag
++		struct hdr_tcp *tcph = hdr_tcp::access(p);
++		tcph->wireless() = 1;
++	}
+ 
+          /* list-based improvement */
+          if(highestAntennaZ_ == -1) {
+@@ -369,7 +375,7 @@ WirelessChannel::sendUp(Packet* p, Phy *tifp)
+ 			 sortLists();
+ 		 }
+ 		 
+-		 affectedNodes = getAffectedNodes(mtnode, distCST_ + /* safety */ 5, &numAffectedNodes);
++		 affectedNodes = getAffectedNodes(mtnode, 1200, &numAffectedNodes);
+ 		 for (i=0; i < numAffectedNodes; i++) {
+ 			 rnode = affectedNodes[i];
+ 			 
+diff --git a/tcp/tcp-sink.cc b/tcp/tcp-sink.cc
+index e671215..0cf8de3 100644
+--- a/tcp/tcp-sink.cc
++++ b/tcp/tcp-sink.cc
+@@ -361,6 +361,11 @@ void TcpSink::recv(Packet* pkt, Handler*)
+ 	int numBytes = hdr_cmn::access(pkt)->size();
+ 	// number of bytes in the packet just received
+ 	hdr_tcp *th = hdr_tcp::access(pkt);
++	if(th->wireless()){
++		printf("TcpSink::recv(): wireless packet received. secno: %d\n", th->seqno());
++	}else{
++		printf("TcpSink::recv(): wired packet. secno: %d\n", th->seqno());
++	}
+ 	/* W.N. Check if packet is from previous incarnation */
+ 	if (th->ts() < lastreset_) {
+ 		// Remove packet and do nothing
+diff --git a/tcp/tcp-snr.cc b/tcp/tcp-snr.cc
+new file mode 100644
+index 0000000..c4be7ab
+--- /dev/null
++++ b/tcp/tcp-snr.cc
+@@ -0,0 +1,153 @@
++#include <stdio.h>
++#include "tcp.h"
++#include "ip.h"
++#include "flags.h"
++#include "packet.h"
++#include "../mac/wireless-phy.h"
++
++class MyTcpAgent : public virtual TcpAgent
++{
++private:
++    //double get_snr(Packet *p);
++public:
++    MyTcpAgent();
++    void timeout(int tno);
++    void recv(Packet *pkt, Handler *);
++};
++
++static class MyTcpAgentClass : public TclClass
++{
++public:
++    MyTcpAgentClass() : TclClass("Agent/TCP/MyTcp") {}
++    TclObject *create(int, const char *const *)
++    {
++        return (new MyTcpAgent());
++    }
++} class_my_tcp_agent;
++
++MyTcpAgent::MyTcpAgent() : TcpAgent()
++{
++    // Set the value of reserved bit to 1
++    // hdr_tcp *tcph = hdr_tcp::access(p_);
++    // tcph->flags() |= TH_RESERVED;
++}
++
++/* double MyTcpAgent::get_snr(Packet *p) {
++    hdr_cmn *ch = hdr_cmn::access(p);
++    hdr_ip *iph = hdr_ip::access(p);
++    hdr_flags *fh = hdr_flags::access(p);
++
++    double P_signal, P_noise, P_signal_db, P_noise_db, SNR_db;
++
++    // Calculate P_signal (signal power)
++    if (fh->ect() && fh->ce()) {
++        // Congestion experienced bit set, so the link is congested (wired)
++        P_signal = P_s_wired_;
++    } else {
++        // Congestion experienced bit not set, so the link is not congested (wireless)
++        P_signal = P_s_wireless_;
++    }
++
++    // Calculate P_noise (noise power)
++    int ifid = ifaddr_to_ifid(iph->daddr());
++    if (ifid >= 0 && ifid < MAX_NETIF) {
++        P_noise = if_noise_[ifid];
++    } else {
++        P_noise = 0.0;
++    }
++
++    // Convert P_signal and P_noise to dB
++    P_signal_db = 10 * log10(P_signal);
++    P_noise_db = 10 * log10(P_noise);
++
++    // Calculate SNR in dB
++    SNR_db = P_signal_db - P_noise_db;
++
++    return SNR_db;
++}
++
++ */
++void MyTcpAgent::timeout(int tno)
++{
++    // Get the value of reserved bit from the packet
++    /* hdr_tcp *tcph = hdr_tcp::access(p_);
++    int reserved = tcph->flags() & TH_RESERVED;
++    if (reserved == 0)
++    {               // wired link
++        cwnd_ /= 2; // congestion on wired link
++    }
++    else
++    {                           // wireless link
++        double snr = get_snr(p_); // get the SNR value
++        if (snr > 5.0)
++        {
++            cwnd_ /= 2; // congestion on wireless link
++        }
++        else
++        {
++            // retransmit packet and don't change cwnd
++            send_one();
++            return;
++        }
++    } */
++    printf("Timeout function called\n");
++    TcpAgent::timeout(tno);
++}
++
++void MyTcpAgent::recv(Packet *pkt, Handler *)
++{
++    printf("Recv function called\n");
++
++    // get common the header
++    hdr_cmn *ch = hdr_cmn::access(pkt);
++    // get the tcp header
++    hdr_tcp *tcph = hdr_tcp::access(pkt);
++
++    // check if the packet is an ACK
++    if (ch->ptype() != PT_TCP)
++    {
++        printf("Packet is not TCP\n");
++        Packet::free(pkt);
++        return;
++    }
++
++    /* // check if the packet is an ACK
++    if (tcph->ackno() == 0)
++    {
++        printf("Packet is not an ACK\n");
++        Packet::free(pkt);
++        return;
++    }
++
++    // check the reserved bit
++    // to see the packet is wired or wirless
++    if(tcph->is_wireless()){
++        printf("Packet is wireless\n");
++
++        double rx_power = pkt->txinfo_.RxPr;
++        double tx_power = pkt->txinfo_.getTxPr();
++
++        // print the tx and rx power
++        printf("Tx power: %f\n", tx_power);
++        printf("Rx power: %f\n", rx_power);
++
++        // generate a gaussian noise
++        double noise = 0.0;
++        for(int i = 0; i < 12; i++){
++            noise += Random::uniform();
++        }
++        noise -= 6.0;
++
++        // calculate the SNR
++        double snr = rx_power - noise;
++        printf("SNR: %f\n", snr);
++    }else {
++        printf("Packet is wired\n");
++    } */
++
++    // check if the header is acknowledged
++    
++
++    TcpAgent::recv(pkt, 0);
++}
++
+diff --git a/tcp/tcp.h b/tcp/tcp.h
+index 0a9b936..54bc61c 100644
+--- a/tcp/tcp.h
++++ b/tcp/tcp.h
+@@ -55,6 +55,7 @@ struct hdr_tcp {
+ 	int tcp_flags_;         /* TCP flags for FullTcp */
+ 	int last_rtt_;		/* more recent RTT measurement in ms, */
+ 				/*   for statistics only */
++	int wireless_;	/* 1 if wireless, 0 if wired */
+ 
+ 	static int offset_;	// offset for this header
+ 	inline static int& offset() { return offset_; }
+@@ -74,6 +75,7 @@ struct hdr_tcp {
+ 	int& ackno() { return (ackno_); }  
+ 	int& flags() { return (tcp_flags_); }
+ 	int& last_rtt() { return (last_rtt_); }
++	int& wireless() { return (wireless_); }
+ };
+ 
+ /* these are used to mark packets as to why we xmitted them */
+@@ -105,6 +107,8 @@ struct hdr_tcp {
+ #define TCP_IDLE		0x00000400
+ #define NO_OUTSTANDING_DATA     0x00000800
+ 
++#define TH_RESERVED 0x0F /* Four bits reserved for future use */
++
+ /*
+  * tcp_tick_:
+  * default 0.1,

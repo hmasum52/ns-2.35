@@ -1,1 +1,12 @@
 *.o
+ns
+nstk
+ptypes2tcl
+ns_tcl.cc
+ptypes.cc
+setdest
+dec-tr-stat
+epa-tr-stat
+nlanr-tr-stat
+version.c
+ucb-tr-stat
